@@ -262,6 +262,7 @@ void callback(u_char *useless, const struct pcap_pkthdr *pkthdr, u_char *packet)
 		packet += sizeof(arpheader->oper);
 		for(i = 0; i < 10; i++) {
 			if(i < ETHER_ADDR_LEN) *(packet+(i+10)) = *(my_mac+i);
+			else *(broad_ip+i) = *(packet+(i+10));
 			swap(packet+i, packet+(i+10));
 		}
 		packet -= size + sizeof(arpheader->oper);
