@@ -262,13 +262,13 @@ void callback(u_char *useless, const struct pcap_pkthdr *pkthdr, u_char *packet)
 
 		packet += size;
 		*(packet+1) = ARPOP_REPLY;
-		packet += sizeof(arpheader->oper);
+		packet += sizeof(arpheader->oper) + sizeof(arpheader->sha) + sizeof(arpheader->spa);
 		for(i = 0; i < 10; i++) {
 			if(i < ETHER_ADDR_LEN) *(packet+(i+10)) = *(my_mac+i);
 			else *(broad_ip+i) = *(packet+(i+10));
 			swap(packet+i, packet+(i+10));
 		}
-		packet -= size + sizeof(arpheader->oper);
+		packet -= size + sizeof(arpheader->oper) + sizeof(arpheader->sha) + sizeof(arpheader->spa);
 		printf("\nPacket Creating Finished!!\nCreated Packet Sending...\n");
 		pcap_sendpacket(pcap, packet, length);
 		printf("Created Packet Send Success!!\nYour created_packet is..\n");
