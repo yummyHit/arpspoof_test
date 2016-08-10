@@ -238,9 +238,9 @@ void callback(u_char *useless, const struct pcap_pkthdr *pkthdr, u_char *packet)
 
 		packet += size;
 		*(packet+1) = ARPOP_REQUEST;
-		packet += sizeof(arpheader->oper);
+		packet += sizeof(arpheader->oper) + sizeof(arpheader->sha) + sizeof(arpheader->spa);
 		for(i = 0; i < ETHER_ADDR_LEN; i++) *(packet+i) = *(br_0+i);
-		packet -= size + sizeof(arpheader->oper);
+		packet -= size + sizeof(arpheader->oper) + sizeof(arpheader->sha) + sizeof(arpheader->spa);
 		printf("\nSend a Request Packet to victim...\n");
 		pcap_sendpacket(pcap, packet, length);
 		printf("Request Success!!\nYour request packet is..\n");
